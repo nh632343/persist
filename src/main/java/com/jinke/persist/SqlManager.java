@@ -28,6 +28,7 @@ public class SqlManager {
 
     private final ConcurrentHashMap<Class, OPInfo> classToInfoMap = new ConcurrentHashMap<>();
 
+    //注解信息收集器
     private OPInfoCollector opInfoCollector;
 
     private PersistConfiguration persistConfiguration;
@@ -49,11 +50,15 @@ public class SqlManager {
     }
 
 
+    /**
+     * 插入，除了primary key和transient注解的属性
+     * @param beanList 插入的bean
+     */
     public void insert(List beanList) {
         OPInfo opInfo = getOPInfo(beanList);
         if (opInfo == null) return;
 
-        //get table name
+        //获取真正表名 和 创建表（如果配置了自动创建）
         String tableName = prepare(opInfo, beanList, OPType.INSERT);
         if (tableName == null) return;
 
@@ -68,18 +73,25 @@ public class SqlManager {
         update(beanList, Arrays.asList(updateItems), conditionItems == null ? null : Arrays.asList(conditionItems));
     }
 
+    /**
+     *
+     * @param beanList  插入的bean
+     * @param updateItems   需要更新的属性，string为属性名
+     * @param conditionItems  作为条件的属性，string为属性名, 条件为并且 (and)
+     */
     public void update(List beanList, List<String> updateItems, List<String> conditionItems) {
         if (ArrayUtils.isEmpty(beanList) || ArrayUtils.isEmpty(updateItems)) return;
 
         OPInfo opInfo = getOPInfo(beanList);
         if (opInfo == null) return;
 
-        //get table name
+        //获取真正表名 和 创建表（如果配置了自动创建）
         String tableName = prepare(opInfo, beanList, OPType.UPDATE);
         if (tableName == null) return;
 
         StringBuilder sqlBuilder = new StringBuilder(SQL_HEAD_UPDATE + tableName + " SET ");
 
+        //
         List<Field> fieldList = new ArrayList<>();
         for (int i = 0; i < updateItems.size(); ++i) {
             String name = updateItems.get(i);
@@ -223,7 +235,10 @@ public class SqlManager {
 
         if (opInfo.getCreateStatement() == null || createdTableSet.contains(tableName)) return tableName;
         String sql = "CREATE TABLE IF NOT EXISTS " + tableName + opInfo.getCreateStatement();
-        execute(sql, beanList, OPType.CREATE);
+        if (!execute(sql, beanList, OPType.CREATE)) {
+            //execute fail
+            return null;
+        }
         createdTableSet.add(tableName);
         return tableName;
     }
@@ -239,13 +254,15 @@ public class SqlManager {
         }
     }
 
-    void execute(String sql, List beanList ,OPType opType) {
+    boolean execute(String sql, List beanList ,OPType opType) {
         infoLogger.info(sql);
         try {
             jdbcTemplate.update(sql);
+            return true;
         } catch (Exception e) {
             e.printStackTrace();
             errorHandler.handleError(e, beanList, opType);
+            return false;
         }
     }
 }

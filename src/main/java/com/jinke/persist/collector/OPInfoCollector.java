@@ -5,13 +5,15 @@ import com.jinke.persist.annotation.*;
 import com.jinke.persist.config.SQLErrorHandlerWrapper;
 import com.jinke.persist.constant.Constant;
 import com.jinke.persist.enums.OPType;
+import com.jinke.persist.utils.ArrayUtils;
 import com.jinke.persist.utils.ColumnUtil;
 import com.sun.scenario.effect.impl.prism.PrImage;
+import org.springframework.lang.Nullable;
 
 
 import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,8 +26,45 @@ public class OPInfoCollector {
 
     private ThreadLocal<List> beanListHolder = new ThreadLocal<>();
 
+    //所有注解有错误的类，都存在这里
+    private final Set<Class> errorClassSet = Collections.synchronizedSet(new HashSet<Class>());
+
+    private final ConcurrentHashMap<Class, OPInfo> classToInfoMap = new ConcurrentHashMap<>();
+
     public OPInfoCollector(SQLErrorHandlerWrapper errorHandler) {
         this.errorHandler = errorHandler;
+    }
+
+
+
+    /**
+     * 获取该类的表信息
+     * @param beanList beanList
+     * @return OPInfo, 如果出现错误, 返回null
+     */
+    public @Nullable OPInfo getOPInfo(List beanList) {
+        if (ArrayUtils.isEmpty(beanList) || ArrayUtils.haveNullObject(beanList, errorHandler)) return null;
+
+        Class clazz = beanList.get(0).getClass();
+        //检查beanList中的对象，是否都是同一个类型
+        if (!ArrayUtils.isSameClass(beanList, clazz, errorHandler)) {
+            return null;
+        }
+
+        if (errorClassSet.contains(clazz)) return null;
+
+
+        OPInfo opInfo = classToInfoMap.get(clazz);
+        if (opInfo == null) {
+            opInfo = generateOPInfo(clazz, beanList);
+            if (opInfo == null) {
+                //error
+                errorClassSet.add(clazz);
+                return null;
+            }
+            classToInfoMap.put(clazz, opInfo);
+        }
+        return opInfo;
     }
 
     /**
@@ -33,7 +72,7 @@ public class OPInfoCollector {
      * @param clazz
      * @return   null表示这个class的注解信息有错误
      */
-    public OPInfo generateOPInfo(Class clazz, List beanList) {
+    private OPInfo generateOPInfo(Class clazz, List beanList) {
         beanListHolder.set(beanList);
         OPInfo result = generateOPInfoInner(clazz, beanList);
         beanListHolder.remove();

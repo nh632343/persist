@@ -20,7 +20,7 @@ public class OPInfo {
     private String createStatement;
 
     //保存属性名字和属性的映射
-    //不包括Transient注解的field
+    //不包括NotSql注解的field
     //多线程环境下，只会进行get操作，所以不用concurrentHashMap
     private Map<String, Field> nameToFieldMap = new HashMap<>();
 

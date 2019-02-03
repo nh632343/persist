@@ -1,5 +1,6 @@
 package com.jinke.persist;
 
+import com.jinke.persist.utils.ReflectUtils;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 
 import java.lang.reflect.Field;
@@ -10,12 +11,12 @@ import java.util.List;
 public class ReflectBatchSetter implements BatchPreparedStatementSetter {
     private List beanList;
     private List<Field> fieldList;
-    private SqlManager sqlManager;
+    private DbManager dbManager;
 
-    public ReflectBatchSetter(List beanList, List<Field> fieldList, SqlManager sqlManager) {
+    public ReflectBatchSetter(List beanList, List<Field> fieldList, DbManager dbManager) {
         this.beanList = beanList;
         this.fieldList = fieldList;
-        this.sqlManager = sqlManager;
+        this.dbManager = dbManager;
     }
 
     @Override
@@ -24,7 +25,7 @@ public class ReflectBatchSetter implements BatchPreparedStatementSetter {
         Object bean = beanList.get(pos);
         for (int i = 1; i <= fieldList.size(); ++i) {
             Field field = fieldList.get(i-1);
-            preparedStatement.setObject(i, sqlManager.getFieldValue(field, bean));
+            preparedStatement.setObject(i, ReflectUtils.getFieldValue(field, bean, dbManager.getPersistConfiguration()));
         }
     }
 

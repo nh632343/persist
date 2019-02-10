@@ -1,13 +1,11 @@
 package com.jinke.persist.collector;
 
-import com.jinke.persist.OPInfo;
+import com.jinke.persist.BeanInfo;
 import com.jinke.persist.annotation.*;
+import com.jinke.persist.config.PersistConfiguration;
 import com.jinke.persist.config.SQLErrorHandlerWrapper;
-import com.jinke.persist.constant.Constant;
-import com.jinke.persist.enums.OPType;
 import com.jinke.persist.utils.ArrayUtils;
 import com.jinke.persist.utils.ColumnUtil;
-import com.sun.scenario.effect.impl.prism.PrImage;
 import org.springframework.lang.Nullable;
 
 
@@ -17,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class OPInfoCollector {
+public class BeanInfoCollector {
     private static final String PLACE_HOLDER_PATTERN_STRING = "\\{(.*?)\\}";
     private static final Pattern TABLE_NAME_PLACE_HOLDER_PATTERN = Pattern.compile(PLACE_HOLDER_PATTERN_STRING);
     private static final String INTERNAL_PLACE_HOLDER = "%s";
@@ -29,9 +27,9 @@ public class OPInfoCollector {
     //所有注解有错误的类，都存在这里
     private final Set<Class> errorClassSet = Collections.synchronizedSet(new HashSet<Class>());
 
-    private final ConcurrentHashMap<Class, OPInfo> classToInfoMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Class, BeanInfo> classToInfoMap = new ConcurrentHashMap<>();
 
-    public OPInfoCollector(SQLErrorHandlerWrapper errorHandler) {
+    public BeanInfoCollector(SQLErrorHandlerWrapper errorHandler) {
         this.errorHandler = errorHandler;
     }
 
@@ -42,7 +40,7 @@ public class OPInfoCollector {
      * @param beanList beanList
      * @return OPInfo, 如果出现错误, 返回null
      */
-    public @Nullable OPInfo getOPInfo(List beanList) {
+    public @Nullable BeanInfo getBeanInfo(List beanList, PersistConfiguration persistConfiguration) {
         if (ArrayUtils.isEmpty(beanList) || ArrayUtils.haveNullObject(beanList, errorHandler)) return null;
 
         Class clazz = beanList.get(0).getClass();
@@ -54,17 +52,17 @@ public class OPInfoCollector {
         if (errorClassSet.contains(clazz)) return null;
 
 
-        OPInfo opInfo = classToInfoMap.get(clazz);
-        if (opInfo == null) {
-            opInfo = generateOPInfo(clazz, beanList);
-            if (opInfo == null) {
+        BeanInfo beanInfo = classToInfoMap.get(clazz);
+        if (beanInfo == null) {
+            beanInfo = generateOPInfo(clazz, beanList, persistConfiguration);
+            if (beanInfo == null) {
                 //error
                 errorClassSet.add(clazz);
                 return null;
             }
-            classToInfoMap.put(clazz, opInfo);
+            classToInfoMap.put(clazz, beanInfo);
         }
-        return opInfo;
+        return beanInfo;
     }
 
     /**
@@ -72,15 +70,15 @@ public class OPInfoCollector {
      * @param clazz
      * @return   null表示这个class的注解信息有错误
      */
-    private OPInfo generateOPInfo(Class clazz, List beanList) {
+    private BeanInfo generateOPInfo(Class clazz, List beanList, PersistConfiguration persistConfiguration) {
         beanListHolder.set(beanList);
-        OPInfo result = generateOPInfoInner(clazz, beanList);
+        BeanInfo result = generateOPInfoInner(clazz, beanList, persistConfiguration);
         beanListHolder.remove();
         return result;
     }
 
-    private OPInfo generateOPInfoInner(Class clazz, List beanList) {
-        String tableName = getTableName(clazz);
+    private BeanInfo generateOPInfoInner(Class clazz, List beanList, PersistConfiguration persistConfiguration) {
+        String tableName = getTableName(clazz, persistConfiguration);
         if (ColumnUtil.empty(tableName)) return null;
 
 
@@ -90,12 +88,12 @@ public class OPInfoCollector {
             return null;
         }
 
-        OPInfo opInfo = new OPInfo();
+        BeanInfo beanInfo = new BeanInfo();
         //把原来的占位符换成%s
-        opInfo.setTableName(tableName.replaceAll(PLACE_HOLDER_PATTERN_STRING, INTERNAL_PLACE_HOLDER));
-        opInfo.setTableNameParam(paramList);
+        beanInfo.setTableName(tableName.replaceAll(PLACE_HOLDER_PATTERN_STRING, INTERNAL_PLACE_HOLDER));
+        beanInfo.setTableNameParam(paramList);
 
-        return collectInfo(clazz, opInfo);
+        return collectInfo(clazz, beanInfo, persistConfiguration);
     }
 
     /**
@@ -103,7 +101,7 @@ public class OPInfoCollector {
      * @param clazz
      * @return null表示有错误
      */
-    private String getTableName(Class clazz) {
+    private String getTableName(Class clazz, PersistConfiguration persistConfiguration) {
         TableName tableNameAno = (TableName) clazz.getAnnotation(TableName.class);
         if (tableNameAno == null) {
             onError("Class:" + clazz.getName() + "  have no TableName Annotation");
@@ -115,7 +113,9 @@ public class OPInfoCollector {
             onError("Class:" + clazz.getName() + "  TableName Annotation is empty");
             return null;
         }
-        return Constant.SQL_TRANSFER + tableName + Constant.SQL_TRANSFER;
+
+        String sqlTransfer = persistConfiguration.getDialect().getRealSQLTransfer();
+        return sqlTransfer + tableName + sqlTransfer;
     }
 
     /**
@@ -150,63 +150,61 @@ public class OPInfoCollector {
     /**
      *
      * @param clazz
-     * @param opInfo
+     * @param beanInfo
      * @return
      */
-    private OPInfo collectInfo(Class clazz, OPInfo opInfo) {
+    private BeanInfo collectInfo(Class clazz, BeanInfo beanInfo, PersistConfiguration persistConfiguration) {
         List<Field> insertFieldList = new ArrayList<>();
         InsertBuilder insertBuilder = new InsertBuilder();
+        ColumnGroupBuilder columnGroupBuilder = new ColumnGroupBuilder();
 
-        //createBuilder 和 autoCreateAno 同时为空或同时不为空
-        //建表语句
-        CreateTableBuilder createBuilder = null;
+
         //判断是否有自动建表注解
         AutoCreate autoCreateAno = (AutoCreate) clazz.getAnnotation(AutoCreate.class);
         if (autoCreateAno != null) {
-            createBuilder = new CreateTableBuilder(autoCreateAno);
+            String[] createStatements = autoCreateAno.value();
+            if (ArrayUtils.isEmpty(createStatements)) {
+                onError("Class:" + clazz.getName() + "'s AutoCreate Annotation has empty String Array");
+                return null;
+            }
+            beanInfo.setCreateStatements(createStatements);
         }
+
+        String sqlTransfer = persistConfiguration.getDialect().getRealSQLTransfer();
 
         //遍历field -------------------------------------------
         //考虑继承，还要遍历所有父类
         for (; clazz != Object.class; clazz = clazz.getSuperclass()) {
             //
             for (Field field : clazz.getDeclaredFields()) {
-                //ignore Transient field
+                //ignore NotSql field
                 if (field.getAnnotation(NotSql.class) != null) continue;
 
                 field.setAccessible(true);
                 insertFieldList.add(field);
-                opInfo.putNameField(field.getName(), field);
 
                 //find insert ColumnName
-                String columnName = ColumnUtil.getColumnName(field);
-                opInfo.putNameColumnName(field.getName(), columnName);
-
-                //收集自动建表信息
-                if (createBuilder != null) {
-                    try {
-                        createBuilder.addField(clazz, field, columnName);
-                    } catch (Exception e) {
-                        onError(e.getMessage());
-                        return null;
-                    }
-                }
+                String columnName = ColumnUtil.getColumnName(field, sqlTransfer);
+                beanInfo.putFieldToColumnName(field, columnName);
 
                 insertBuilder.addColumn(columnName);
+                try {
+                    columnGroupBuilder.addField(field);
+                } catch (Exception e) {
+                    onError(e.getMessage());
+                    return null;
+                }
             }
         }
+
         //遍历field 结束--------------------------------------------------
-
-        if (createBuilder != null) {
-            opInfo.setCreateStatement(createBuilder.toString());
-        }
-
-        opInfo.setInsertStatement(insertBuilder.toString());
-        opInfo.setInsertFieldList(insertFieldList);
-        return opInfo;
+        beanInfo.setInsertStatement(insertBuilder.toString());
+        beanInfo.setInsertFieldList(insertFieldList);
+        beanInfo.setGroupToFieldListMap(columnGroupBuilder.getGroupToFieldListMap());
+        return beanInfo;
     }
 
     private void onError(String msg) {
-        errorHandler.handleError(msg, beanListHolder.get(), OPType.CHECK);
+        errorHandler.handleError(msg, beanListHolder.get());
     }
 }

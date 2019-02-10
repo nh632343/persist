@@ -4,8 +4,7 @@ import com.jinke.persist.config.OPOption;
 import com.jinke.persist.config.PersistConfiguration;
 import com.jinke.persist.config.SQLErrorHandlerWrapper;
 import com.jinke.persist.config.TableNameOverride;
-import com.jinke.persist.constant.Constant;
-import com.jinke.persist.enums.OPType;
+import com.jinke.persist.utils.ArrayUtils;
 import com.jinke.persist.utils.ReflectUtils;
 import org.springframework.lang.Nullable;
 
@@ -35,22 +34,21 @@ public class OPPrepare {
     /**
      * 获取真正的表名，包括表名处理(tableNameOverride)
      * 首先是替换表名中的占位符，再表名处理
-     * @param opInfo opInfo
+     * @param beanInfo opInfo
      * @param beanList beanList
-     * @param opType
-     * @param opConfig
+     * @param opOption
      * @return
      */
-    private @Nullable String getRealTableName(OPInfo opInfo, List beanList, OPType opType, OPOption opConfig) {
-        String tableName = opInfo.getTableName();
-        if (opInfo.getTableNameParam().isEmpty())
+    private @Nullable String getRealTableName(BeanInfo beanInfo, List beanList, OPOption opOption) {
+        String tableName = beanInfo.getTableName();
+        if (beanInfo.getTableNameParam().isEmpty())
             //没有占位符，跳过替换步骤
-            return handleTableNameOverride(persistConfiguration.getTableNameOverride(), tableName, beanList, opConfig);
+            return handleTableNameOverride(persistConfiguration.getTableNameOverride(), tableName, beanList, opOption);
         //return persistConfiguration.getTableNameOverride() == null ? tableName : persistConfiguration.getTableNameOverride().overrideTableName(tableName, beanList);
 
         //if have placeholder, replace it.
         Object bean = beanList.get(0);
-        List<Field> paramFields = opInfo.getTableNameParam();
+        List<Field> paramFields = beanInfo.getTableNameParam();
         //从属性找到占位符的实际值
         String[] values = new String[paramFields.size()];
         for (int i = 0; i < paramFields.size(); ++i) {
@@ -58,7 +56,7 @@ public class OPPrepare {
             Object value = ReflectUtils.getFieldValue(field, bean, false, persistConfiguration);
             if (value == null) {
                 //属性不能为null
-                errorHandler.handleError(field.getDeclaringClass() + "->" + field.getName() + " is null, can not replace table name", beanList, opType);
+                errorHandler.handleError(field.getDeclaringClass() + "->" + field.getName() + " is null, can not replace table name", beanList);
                 return null;
             }
             values[i] = value.toString();
@@ -67,14 +65,14 @@ public class OPPrepare {
         try {
             tableName = String.format(tableName, values);
         } catch (Exception e) {
-            errorHandler.handleError(e, beanList, opType);
+            errorHandler.handleError(e, beanList);
             return null;
         }
 
 //        if (persistConfiguration.getTableNameOverride() != null) {
 //            tableName = persistConfiguration.getTableNameOverride().overrideTableName(tableName, beanList);
 //        }
-        return handleTableNameOverride(persistConfiguration.getTableNameOverride(), tableName, beanList, opConfig);
+        return handleTableNameOverride(persistConfiguration.getTableNameOverride(), tableName, beanList, opOption);
     }
 
     /**
@@ -85,29 +83,38 @@ public class OPPrepare {
      *    然后是opConfig的tableNameOverride
      * @param tableNameOverride persistConfiguration的tableNameOverride, 可为空
      * @param tableName 带 ` 的tableName
-     * @param opConfig 额外参数
+     * @param opOption 额外参数
      * @return 返回的tableName依然带有 `
      */
-    private String handleTableNameOverride(TableNameOverride tableNameOverride, String tableName, List beanList, OPOption opConfig) {
-        if (tableNameOverride == null && (opConfig == null || opConfig.getTableNameOverride() == null)) return tableName;
-        //去除两边的 `
-        String retName = tableName.substring(1, tableName.length() - 1);
+    private String handleTableNameOverride(TableNameOverride tableNameOverride, String tableName, List beanList, OPOption opOption) {
+        if (tableNameOverride == null && (opOption == null || opOption.getTableNameOverride() == null)) return tableName;
+
+        //去除两边的 转义符
+        int transferLen = persistConfiguration.getDialect().getRealSQLTransfer().length();
+        String retName = tableName.substring(transferLen, tableName.length() - transferLen);
         if (tableNameOverride != null) {
             retName = tableNameOverride.overrideTableName(retName, beanList);
         }
-        if (opConfig != null && opConfig.getTableNameOverride() != null) {
-            retName = opConfig.getTableNameOverride().overrideTableName(retName, beanList);
+        if (opOption != null && opOption.getTableNameOverride() != null) {
+            retName = opOption.getTableNameOverride().overrideTableName(retName, beanList);
         }
-        return Constant.SQL_TRANSFER  + retName + Constant.SQL_TRANSFER;
+
+        String transfer = persistConfiguration.getDialect().getSQLTransfer();
+        return transfer  + retName + transfer;
     }
 
-    public String prepare(OPInfo opInfo, List beanList, OPType opType, OPOption opConfig) {
-        String tableName = getRealTableName(opInfo, beanList, opType, opConfig);
+    public String prepare(BeanInfo beanInfo, List beanList, OPOption opOption) {
+        String tableName = getRealTableName(beanInfo, beanList, opOption);
         if (tableName == null) return null;
 
-        if (opInfo.getCreateStatement() == null || createdTableSet.contains(tableName)) return tableName;
-        String sql = "CREATE TABLE IF NOT EXISTS " + tableName + opInfo.getCreateStatement();
-        if (!dbManager.execute(sql, beanList, OPType.CREATE)) {
+        if (ArrayUtils.isEmpty(beanInfo.getCreateStatements()) || createdTableSet.contains(tableName)) {
+            return tableName;
+        }
+
+        String[] createTableSqls = persistConfiguration.getDialect().createTable(tableName, beanInfo);
+        if (ArrayUtils.isEmpty(createTableSqls)) return null;
+
+        if (!dbManager.execute(createTableSqls, beanList)) {
             //execute fail
             return null;
         }

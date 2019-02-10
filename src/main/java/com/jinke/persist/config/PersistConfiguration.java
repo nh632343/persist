@@ -1,12 +1,33 @@
 package com.jinke.persist.config;
 
 
+import com.jinke.persist.dialect.AbstractDialect;
+import com.jinke.persist.dialect.DialectFactory;
+import com.jinke.persist.enums.DialectType;
+
 public class PersistConfiguration {
     private EmptyValueHandler defaultEmptyHandler = new DefaultEmptyValueHandler();
     private EmptyValueHandler customEmptyHandler;
     private SQLErrorHandler sqlErrorHandler;
     private InfoLogger infoLogger;
     private TableNameOverride tableNameOverride;
+
+    private AbstractDialect currentDialect;
+
+
+    public PersistConfiguration(DialectType dialectType) {
+        if (dialectType == null) {
+            throw new IllegalArgumentException("argument dialectType is null");
+        }
+        currentDialect = DialectFactory.getDialect(dialectType);
+    }
+
+    public PersistConfiguration(AbstractDialect currentDialect) {
+        if (currentDialect == null) {
+            throw new IllegalArgumentException("argument currentDialect is null");
+        }
+        this.currentDialect = currentDialect;
+    }
 
 
     public PersistConfiguration withEmptyValueHandler(EmptyValueHandler emptyValueHandler) {
@@ -48,5 +69,11 @@ public class PersistConfiguration {
 
     public TableNameOverride getTableNameOverride() {
         return tableNameOverride;
+    }
+
+
+
+    public AbstractDialect getDialect() {
+        return currentDialect;
     }
 }

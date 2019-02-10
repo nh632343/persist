@@ -8,6 +8,5 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
 public @interface AutoCreate {
-    String tableProps() default "";
-    String otherProps() default "";
+    String[] value();
 }

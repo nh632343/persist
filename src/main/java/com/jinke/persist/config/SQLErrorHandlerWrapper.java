@@ -1,7 +1,5 @@
 package com.jinke.persist.config;
 
-import com.jinke.persist.enums.OPType;
-
 import java.util.List;
 
 public class SQLErrorHandlerWrapper {
@@ -12,21 +10,21 @@ public class SQLErrorHandlerWrapper {
     }
 
 
-    public void handleError(String msg, List beanList, OPType opType) {
-        handleError(msg, beanList, opType, null);
+    public void handleError(String msg, List beanList) {
+        handleError(msg, beanList, null);
     }
 
-    public void handleError(String msg, List beanList, OPType opType, String sql) {
+    public void handleError(String msg, List beanList, String sql) {
         if (sqlErrorHandler == null) return;
-        sqlErrorHandler.handleError(new Exception(msg), beanList, opType, sql);
+        sqlErrorHandler.handleError(new Exception(msg), beanList, sql);
     }
 
-    public void handleError(Exception e, List beanList, OPType opType) {
-        handleError(e, beanList, opType, null);
+    public void handleError(Exception e, List beanList) {
+        handleError(e, beanList, null);
     }
 
-    public void handleError(Exception e, List beanList, OPType opType, String sql) {
+    public void handleError(Exception e, List beanList, String sql) {
         if (sqlErrorHandler == null) return;
-        sqlErrorHandler.handleError(e, beanList, opType, sql);
+        sqlErrorHandler.handleError(e, beanList, sql);
     }
 }

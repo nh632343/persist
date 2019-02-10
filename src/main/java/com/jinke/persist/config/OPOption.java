@@ -30,7 +30,7 @@ public class OPOption<T> {
 
         private ConflictAction conflictAction;
 
-        private String[] updateField;
+        private String updateFieldGroup;
 
         public ConflictOption withConstraint(String constraint) {
             this.constraint = constraint;
@@ -42,8 +42,8 @@ public class OPOption<T> {
             return this;
         }
 
-        public ConflictOption withUpdateField(String[] updateField) {
-            this.updateField = updateField;
+        public ConflictOption withUpdateField(String updateField) {
+            this.updateFieldGroup = updateField;
             return this;
         }
 
@@ -55,8 +55,17 @@ public class OPOption<T> {
             return conflictAction;
         }
 
-        public String[] getUpdateField() {
-            return updateField;
+        public String getUpdateFieldGroup() {
+            return updateFieldGroup;
+        }
+
+        @Override
+        public String toString() {
+            return "ConflictOption{" +
+                    "constraint='" + constraint + '\'' +
+                    ", conflictAction=" + conflictAction +
+                    ", updateFieldGroup='" + updateFieldGroup + '\'' +
+                    '}';
         }
     }
 }

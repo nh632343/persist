@@ -1,9 +1,8 @@
 package com.jinke.persist;
 
-import com.jinke.persist.collector.OPInfoCollector;
+import com.jinke.persist.collector.BeanInfoCollector;
 import com.jinke.persist.config.*;
-import com.jinke.persist.enums.OPType;
-import com.jinke.persist.utils.ArrayUtils;
+import com.jinke.persist.dialect.AbstractDialect;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.lang.reflect.Field;
@@ -12,13 +11,15 @@ import java.util.*;
 
 public class DbManager {
 
-    private static final String SQL_HEAD_INSERT = "INSERT INTO ";
-    private static final String SQL_HEAD_UPDATE = "UPDATE ";
+    private interface ExecSqlArgsFunc {
+        AbstractDialect.ExecSqlArgs get(List beanList, String tableName, BeanInfo beanInfo, OPOption opOption);
+    }
 
 
+    private ThreadLocal<List> beanListHolder = new ThreadLocal<>();
 
     //注解信息收集器
-    private OPInfoCollector opInfoCollector;
+    private BeanInfoCollector beanInfoCollector;
 
     private OPPrepare opPrepare;
 
@@ -36,8 +37,21 @@ public class DbManager {
         errorHandler = new SQLErrorHandlerWrapper(persistConfiguration.getSqlErrorHandler());
         infoLogger = new InfoLoggerWrapper(persistConfiguration.getInfoLogger());
 
-        opInfoCollector = new OPInfoCollector(errorHandler);
+        beanInfoCollector = new BeanInfoCollector(errorHandler);
         opPrepare = new OPPrepare(this, persistConfiguration, errorHandler);
+
+        this.persistConfiguration.getDialect().setErrorHandler(new AbstractDialect.IErrorHandler() {
+            @Override
+            public void onError(String msg) {
+                errorHandler.handleError(msg, beanListHolder.get());
+            }
+
+            @Override
+            public void onError(Exception e) {
+                errorHandler.handleError(e, beanListHolder.get());
+            }
+        });
+
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -49,105 +63,53 @@ public class DbManager {
     /**
      * 插入，除了primary key和transient注解的属性
      * @param beanList 插入的bean
-     * @param opConfig 额外参数，可为null
+     * @param opOption 额外参数，可为null
      */
-    public void insert(List beanList, OPOption opConfig) {
-        OPInfo opInfo = opInfoCollector.getOPInfo(beanList);
-        if (opInfo == null) return;
+    public void insert(List beanList, OPOption opOption) {
+        handleInner(beanList, opOption,
+                new ExecSqlArgsFunc() {
+                    @Override
+                    public AbstractDialect.ExecSqlArgs get(List beanList, String tableName, BeanInfo beanInfo, OPOption opOption) {
+                        return persistConfiguration.getDialect().insert(
+                                tableName, beanInfo, beanList, opOption);
+                    }
+                });
+
+    }
+
+
+    public void update(List beanList, String updateGroup, String conditionGroup) {
+        update(beanList, updateGroup, conditionGroup, null);
+    }
+
+    public void update(List beanList, final String updateGroup, final String conditionGroup, OPOption opOption) {
+        handleInner(beanList, opOption,
+                new ExecSqlArgsFunc() {
+            @Override
+            public AbstractDialect.ExecSqlArgs get(List beanList, String tableName, BeanInfo beanInfo, OPOption opOption) {
+                return persistConfiguration.getDialect().update(
+                        tableName, updateGroup, conditionGroup, beanInfo, beanList, opOption);
+            }
+        });
+
+    }
+
+    private void handleInner(List beanList, OPOption opOption, ExecSqlArgsFunc execSqlArgsFunc) {
+        beanListHolder.set(beanList);
+        BeanInfo beanInfo = beanInfoCollector.getBeanInfo(beanList, persistConfiguration);
+        if (beanInfo == null) return;
 
         //获取真正表名 和 创建表（如果配置了自动创建）
-        String tableName = opPrepare.prepare(opInfo, beanList, OPType.INSERT, opConfig);
+        String tableName = opPrepare.prepare(beanInfo, beanList, opOption);
         if (tableName == null) return;
 
-        String sql = SQL_HEAD_INSERT + tableName + opInfo.getInsertStatement();
+        AbstractDialect.ExecSqlArgs args = execSqlArgsFunc.get(beanList, tableName, beanInfo, opOption);
+        if (args == null) return;
 
-        execute(sql, beanList, opInfo.getInsertFieldList(), OPType.INSERT);
+        execute(args.sql, beanList, args.fieldList);
+        beanListHolder.remove();
     }
 
-    public void update(List beanList, String[] updateItems, String[] conditionItems) {
-        update(beanList, updateItems, conditionItems, null);
-    }
-
-    /**
-     *
-     * @param beanList  插入的bean
-     * @param updateItems   需要更新的属性，string为属性名
-     * @param conditionItems  作为条件的属性，string为属性名, 条件为并且 (and)         可为null
-     * @param opConfig 额外参数，可为null
-     */
-    public void update(List beanList, String[] updateItems, String[] conditionItems, OPOption opConfig) {
-        if (ArrayUtils.isEmpty(beanList) || ArrayUtils.isEmpty(updateItems)) return;
-        update(beanList, Arrays.asList(updateItems), conditionItems == null ? null : Arrays.asList(conditionItems), opConfig);
-    }
-
-    public void update(List beanList, List<String> updateItems, List<String> conditionItems) {
-        update(beanList, updateItems, conditionItems, null);
-    }
-
-    /**
-     *
-     * @param beanList  插入的bean
-     * @param updateItems   需要更新的属性，string为属性名
-     * @param conditionItems  作为条件的属性，string为属性名, 条件为并且 (and)         可为null
-     * @param opConfig 额外参数，可为null
-     */
-    public void update(List beanList, List<String> updateItems, List<String> conditionItems, OPOption opConfig) {
-        if (ArrayUtils.isEmpty(beanList) || ArrayUtils.isEmpty(updateItems)) return;
-
-        OPInfo opInfo = opInfoCollector.getOPInfo(beanList);
-        if (opInfo == null) return;
-
-        //获取真正表名 和 创建表（如果配置了自动创建）
-        String tableName = opPrepare.prepare(opInfo, beanList, OPType.UPDATE, opConfig);
-        if (tableName == null) return;
-
-        StringBuilder sqlBuilder = new StringBuilder(SQL_HEAD_UPDATE + tableName + " SET ");
-
-        //fieldList为需要替换的field的集合
-        List<Field> fieldList = new ArrayList<>();
-        //根据属性名找到属性和列名
-        for (int i = 0; i < updateItems.size(); ++i) {
-            String name = updateItems.get(i);
-            Field updateField = opInfo.getField(name);
-
-            if (updateField == null) {
-                errorHandler.handleError("can not find property:" + name + " in Class:" + beanList.get(0).getClass(), beanList, OPType.UPDATE);
-                return;
-            }
-            fieldList.add(updateField);
-            sqlBuilder.append(opInfo.getColumnName(name));
-            sqlBuilder.append("=?,");
-        }
-        sqlBuilder.deleteCharAt(sqlBuilder.length() - 1);
-
-
-        if (!ArrayUtils.isEmpty(conditionItems)) {
-            sqlBuilder.append(" where ");
-            boolean isFirst = true;
-            for (int i = 0; i < conditionItems.size(); ++i) {
-                String name = conditionItems.get(i);
-                Field condField = opInfo.getField(name);
-
-                if (condField == null) {
-                    errorHandler.handleError("can not find property:" + name + " in Class:" + beanList.get(0).getClass(), beanList, OPType.UPDATE);
-                    return;
-                }
-                fieldList.add(condField);
-                if (isFirst) {
-                    isFirst = false;
-                } else {
-                    sqlBuilder.append(" and ");
-                }
-                sqlBuilder.append(opInfo.getColumnName(name));
-                sqlBuilder.append("=?");
-            }
-        }
-
-        String sql = sqlBuilder.toString();
-
-        execute(sql, beanList, fieldList, OPType.UPDATE);
-
-    }
 
     public PersistConfiguration getPersistConfiguration() {
         return persistConfiguration;
@@ -156,26 +118,26 @@ public class DbManager {
 
 
 
-    boolean execute(String sql, List beanList, List<Field> fieldList, OPType opType) {
+    boolean execute(String sql, List beanList, List<Field> fieldList) {
         infoLogger.info(sql);
         try {
             jdbcTemplate.batchUpdate(sql, new ReflectBatchSetter(beanList, fieldList, this));
             return true;
         } catch (Exception e) {
             e.printStackTrace();
-            errorHandler.handleError(e, beanList, opType, sql);
+            errorHandler.handleError(e, beanList, sql);
             return false;
         }
     }
 
-    boolean execute(String sql, List beanList ,OPType opType) {
-        infoLogger.info(sql);
+    boolean execute(String[] sql, List beanList) {
+
         try {
-            jdbcTemplate.update(sql);
+            jdbcTemplate.batchUpdate(sql);
             return true;
         } catch (Exception e) {
             e.printStackTrace();
-            errorHandler.handleError(e, beanList, opType, sql);
+            errorHandler.handleError(e, beanList, Arrays.toString(sql));
             return false;
         }
     }

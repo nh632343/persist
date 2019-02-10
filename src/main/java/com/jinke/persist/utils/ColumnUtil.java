@@ -1,9 +1,10 @@
 package com.jinke.persist.utils;
 
+import com.jinke.persist.BeanInfo;
 import com.jinke.persist.annotation.ColumnName;
-import com.jinke.persist.constant.Constant;
 
 import java.lang.reflect.Field;
+import java.util.List;
 
 public class ColumnUtil {
 
@@ -47,9 +48,9 @@ public class ColumnUtil {
      * 如果field没有ColumnName注解 或 注解值为空，将field的名字转为下划线形式
      * 如果ColumnName注解的值有效，使用注解的值
      * @param field 需要获取列名的field
-     * @return !!!note: 列名的左右会带有 ` 这个字符, 为了避免与mysql关键字冲突, 进行转义.   例如 `app_id`
+     * @return note: 列名的左右会带有转义符
      */
-    public static String getColumnName(Field field) {
+    public static String getColumnName(Field field, String sqlTransfer) {
         ColumnName insertColumnAno = field.getAnnotation(ColumnName.class);
         String column;
         if (insertColumnAno == null || ColumnUtil.empty(insertColumnAno.name())) {
@@ -57,6 +58,26 @@ public class ColumnUtil {
         } else {
             column = insertColumnAno.name();
         }
-        return Constant.SQL_TRANSFER + column + Constant.SQL_TRANSFER;
+        return sqlTransfer + column + sqlTransfer;
+    }
+
+    public static String getAssignColumnSql(List<Field> groupFieldList, BeanInfo beanInfo, String separator) {
+        if (ArrayUtils.isEmpty(groupFieldList)) return "";
+
+        StringBuilder updateSqlBuilder = new StringBuilder(beanInfo.getColumnName(groupFieldList.get(0)));
+        updateSqlBuilder.append("=? ");
+
+        for (int i = 1; i < groupFieldList.size(); ++i) {
+            updateSqlBuilder.append(separator);
+            updateSqlBuilder.append(" ");
+            updateSqlBuilder.append(beanInfo.getColumnName(groupFieldList.get(i)));
+            updateSqlBuilder.append("=? ");
+        }
+
+        return updateSqlBuilder.toString();
+    }
+
+    public static String getAssignColumnSql(List<Field> groupFieldList, BeanInfo beanInfo) {
+        return getAssignColumnSql(groupFieldList, beanInfo, ",");
     }
 }
